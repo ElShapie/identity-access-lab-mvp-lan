@@ -1,10 +1,12 @@
 import hmac
+import json
 import os
 import re
 import secrets
 import sqlite3
 from datetime import timedelta
 from functools import wraps
+from pathlib import Path
 from urllib.parse import quote, urlparse
 
 import requests
@@ -51,6 +53,10 @@ def create_app():
         client_kwargs={"scope": "openid profile email"},
     )
 
+    @app.context_processor
+    def inject_permissions():
+        return {"role_permissions": store.roles()}
+
     # --- Acceso con badge NFC (opcional) ---
     nfc_enabled = os.environ.get("NFC_ENABLED", "false").lower() in ("1", "true", "yes", "on")
     nfc_token = os.environ.get("NFC_BRIDGE_TOKEN", "")
@@ -67,6 +73,13 @@ def create_app():
             return None
         if username == nfc_login_username and nfc_login_password:
             return username, nfc_login_password
+        directory_file = Path(os.environ.get("DIRECTORY_ACCOUNTS_FILE", "/srv/directory/accounts.json"))
+        try:
+            for account in json.loads(directory_file.read_text(encoding="utf-8")):
+                if account.get("userName", "").strip().lower() == username and account.get("password"):
+                    return username, account["password"]
+        except (OSError, ValueError, TypeError):
+            pass
         explicit = "NFC_PASSWORD_" + re.sub(r"[^A-Z0-9]+", "_", username.upper()).strip("_")
         if os.environ.get(explicit):
             return username, os.environ[explicit]
@@ -151,6 +164,10 @@ def create_app():
             return fn(*args, **kwargs)
         return wrapped
 
+    def is_highest(user):
+        protected = {"EMP-001@securityteam.com", "EMP-004@securityteam.com", "EMP-010@securityteam.com"}
+        return bool(user and user.get("title") == "superadmin" and user.get("userName") in protected)
+
     def require(action):
         def decorate(fn):
             @wraps(fn)
@@ -158,12 +175,20 @@ def create_app():
                 uid = session.get("uid")
                 if not uid:
                     return redirect("/login")
-                if not store.permitted(uid, action):
+                current = store.get(uid)
+                if action in ("usuarios", "roles") and not is_highest(current):
                     store.event(uid, action, "DENEGADO")
                     abort(403)
-                if request.method == "POST" and not hmac.compare_digest(request.form.get("csrf", ""), session.get("csrf", "")):
-                    abort(400)
-                store.event(uid, action, "PERMITIDO")
+                required_action = "mantenimiento" if request.endpoint == "api_shift_change" and request.method == "POST" else action
+                if not store.permitted(uid, required_action):
+                    store.event(uid, required_action, "DENEGADO")
+                    abort(403)
+                if request.method == "POST":
+                    body = request.get_json(silent=True) or {}
+                    supplied_csrf = request.form.get("csrf", "") or request.headers.get("X-CSRF-Token", "") or str(body.get("csrf", ""))
+                    if not hmac.compare_digest(supplied_csrf, session.get("csrf", "")):
+                        abort(400)
+                store.event(uid, required_action, "PERMITIDO")
                 return fn(*args, **kwargs)
             return wrapped
         return decorate
@@ -251,6 +276,7 @@ def create_app():
         return render_template("dashboard.html", title="Bitácora", page="events", user=store.get(session["uid"]), users=[], events=store.events(), csrf=session.get("csrf"))
 
     @app.get("/turno")
+    @require("consulta")
     def shift_change():
         user = store.get(session["uid"]) if session.get("uid") else None
         return render_template(
@@ -262,19 +288,23 @@ def create_app():
         )
 
     @app.route("/api/turno", methods=["GET", "POST"])
+    @require("consulta")
     def api_shift_change():
         if request.method == "POST":
             payload = request.get_json(silent=True) or request.form.to_dict() or {}
-            operator = str(payload.get("operator", "Operador SOC")).strip()
+            user = store.get(session["uid"])
             shift = str(payload.get("shift", "tarde")).strip().lower()
             status = str(payload.get("status", "success")).strip().lower()
+            if shift not in {"mañana", "tarde", "noche"} or status not in {"success", "warning", "danger"}:
+                return jsonify(error="Turno o estado no válido"), 400
             cams = payload.get("cams", [])
-            cams_str = ", ".join(cams) if isinstance(cams, list) else str(cams)
+            if not isinstance(cams, list) or any(not isinstance(cam, str) for cam in cams):
+                return jsonify(error="Lista de cámaras no válida"), 400
             action_desc = f"TURNO_{shift.upper()}"
-            if cams_str:
-                action_desc += f" [CAMS: {cams_str}]"
+            if cams:
+                action_desc += " [CAMS: " + ", ".join(cams[:10]) + "]"
             result_label = "CONFORME" if status == "success" else ("ADVERTENCIA" if status == "warning" else "INCIDENCIA")
-            store.event(operator, action_desc, result_label)
+            store.event(user.get("userName", session["uid"]), action_desc, result_label)
             return jsonify(ok=True)
         return jsonify(events=store.events())
 
@@ -322,7 +352,7 @@ def create_app():
         return jsonify(login=True, user=user["userName"])
 
     @app.get("/nfc")
-    @require("admin")
+    @require("nfc")
     def nfc_admin():
         return render_template(
             "dashboard.html",
@@ -337,7 +367,7 @@ def create_app():
         )
 
     @app.post("/nfc/tarjetas")
-    @require("admin")
+    @require("nfc")
     def nfc_card_create():
         try:
             store.register_card(request.form.get("uid", ""), request.form.get("username", ""), request.form.get("label", ""))
@@ -346,15 +376,75 @@ def create_app():
         return redirect("/nfc")
 
     @app.post("/nfc/tarjetas/eliminar")
-    @require("admin")
+    @require("nfc")
     def nfc_card_delete():
         store.remove_card(request.form.get("uid", ""))
         return redirect("/nfc")
 
     @app.get("/admin/usuarios")
-    @require("admin")
+    @require("usuarios")
     def admin_users():
-        return render_template("dashboard.html", title="Usuarios", page="users", user=store.get(session["uid"]), users=store.all(), csrf=session["csrf"])
+        return render_template("dashboard.html", title="Usuarios", page="users", user=store.get(session["uid"]), users=store.all(), roles=store.roles(), csrf=session["csrf"])
+
+    @app.post("/admin/usuarios")
+    @require("usuarios")
+    def admin_user_create():
+        from app.provision_directory import create_keycloak_user, generate_password
+        payload = {key: request.form.get(key, "").strip() for key in ("userName", "displayName", "title", "department", "employeeNumber")}
+        payload["active"] = request.form.get("active") == "true"
+        password = generate_password()
+        try:
+            if not payload["userName"] or not payload["displayName"]:
+                raise ValueError("Nombre y correo son obligatorios")
+            if payload["title"] == "superadmin":
+                raise ValueError("Solo las tres identidades de mayor nivel pueden tener rol superadmin")
+            if store.by_name(payload["userName"]):
+                raise ValueError("Ya existe una cuenta con ese correo")
+            create_keycloak_user(payload, password)
+            user = store.save(payload)
+        except ValueError as error:
+            return redirect("/admin/usuarios?error=" + quote(str(error)))
+        except RuntimeError as error:
+            return redirect("/admin/usuarios?error=" + quote(str(error)))
+        except requests.RequestException:
+            return "Keycloak no está disponible para crear la identidad", 503
+        store.event(user["id"], "USER_CREATE", "OK")
+        return render_template("dashboard.html", title="Credencial temporal", page="new_user_secret", user=store.get(session["uid"]), created_user=user, initial_password=password, csrf=session["csrf"])
+
+    @app.post("/admin/usuarios/<user_id>/rol")
+    @require("usuarios")
+    def admin_user_role(user_id):
+        target = store.get(user_id)
+        if not target:
+            abort(404)
+        role = request.form.get("title", "")
+        protected = {"EMP-001@securityteam.com", "EMP-004@securityteam.com", "EMP-010@securityteam.com"}
+        if (target.get("userName") in protected) != (role == "superadmin"):
+            abort(400)
+        try:
+            store.save({"title": role}, user_id)
+        except ValueError:
+            abort(400)
+        store.event(session["uid"], "USER_ROLE_CHANGE:" + target["userName"], "OK")
+        return redirect("/admin/usuarios")
+
+    @app.get("/admin/roles")
+    @require("roles")
+    def admin_roles():
+        return render_template("dashboard.html", title="Permisos por rol", page="roles", user=store.get(session["uid"]), roles=store.roles(), csrf=session["csrf"])
+
+    @app.post("/admin/roles/<role>")
+    @require("roles")
+    def admin_role_permissions(role):
+        try:
+            permissions = request.form.getlist("permissions")
+            if role == "superadmin":
+                raise ValueError("Los permisos superadmin son fijos y no se pueden reducir desde la aplicación")
+            store.set_role_permissions(role, permissions)
+        except ValueError:
+            abort(400)
+        store.event(session["uid"], "ROLE_CONFIG_CHANGE:" + role, "OK")
+        return redirect("/admin/roles")
 
     @app.post("/logout")
     def logout():
@@ -440,3 +530,4 @@ def create_app():
 
 
 app = create_app()
+

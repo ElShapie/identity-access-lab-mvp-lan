@@ -28,3 +28,7 @@ backups/
 *.bak
 *.tgz
 eventos_rfid.csv
+
+# Directorio de demo con contraseñas personales generadas
+.directory/
+

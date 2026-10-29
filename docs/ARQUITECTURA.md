@@ -29,15 +29,16 @@ La búsqueda inicial usa el correo. Para uso externo real hay que definir el pro
 
 ## Roles
 
-| Rol | Consulta | Mantenimiento | Admin | Registros |
-|---|---:|---:|---:|---:|
-| `admin` | Sí | Sí | Sí | Sí |
-| `mantenimiento` | Sí | Sí | No | No |
-| `auditor` | Sí | No | No | Sí |
-| `consulta` | Sí | No | No | No |
-| `sin_acceso` | No | No | No | No |
+| Rol | Consulta | Mantenimiento | Admin | Registros | Usuarios / roles | NFC |
+|---|---:|---:|---:|---:|---:|---:|
+| `superadmin` | Sí | Sí | Sí | Sí | Sí | Sí |
+| `admin` | Sí | Sí | Sí | Sí | No | No |
+| `mantenimiento` | Sí | Sí | No | No | No | No |
+| `auditor` | Sí | No | No | Sí | No | No |
+| `consulta` | Sí | No | No | No | No | No |
+| `sin_acceso` | No | No | No | No | No | No |
 
-La app es la autoridad para las acciones locales. El claim `lab_role` del token local sirve como dato demostrativo; los permisos se basan en el rol aprovisionado en la base local.
+La app es la autoridad para las acciones locales. Los permisos por rol se guardan en `role_permissions` y se consultan en cada solicitud; las ediciones aplican a sesiones abiertas. Solo DPO (EMP-001), Responsable de RRHH (EMP-004) y Responsable de TI (EMP-010) tienen rol `superadmin` y pueden crear cuentas o editar la matriz. `superadmin` debe conservar los permisos de usuarios y roles. El claim `lab_role` de Keycloak es informativo; los permisos se basan en el rol y la matriz local.
 
 ## Perfil SCIM implementado
 
@@ -63,3 +64,4 @@ El modo local usa HTTP y marca `AUTHLIB_INSECURE_TRANSPORT` para que OIDC funcio
 - [Keycloak: configuración de producción](https://www.keycloak.org/server/configuration-production)
 - [Authlib: cliente OIDC para Flask](https://docs.authlib.org/en/v1.6.6/client/flask.html)
 - [Flask: opciones de despliegue](https://flask.palletsprojects.com/en/stable/deploying/)
+

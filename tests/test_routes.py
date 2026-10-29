@@ -72,6 +72,14 @@ class RouteTests(unittest.TestCase):
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.headers["Location"], "/login")
 
+    def test_admin_role_cannot_open_user_or_role_manager(self):
+        admin = self.store.save({"userName": "admin@example.test", "title": "admin"})
+        with self.client.session_transaction() as session:
+            session["uid"] = admin["id"]
+            session["csrf"] = "csrf-test"
+        self.assertEqual(self.client.get("/admin/usuarios").status_code, 403)
+        self.assertEqual(self.client.get("/admin/roles").status_code, 403)
+
 
 class NfcRouteTests(unittest.TestCase):
     def setUp(self):
@@ -82,13 +90,14 @@ class NfcRouteTests(unittest.TestCase):
         os.environ["APP_DB"] = self.db_path
         os.environ["NFC_ENABLED"] = "true"
         os.environ["NFC_BRIDGE_TOKEN"] = BRIDGE_TOKEN
-        os.environ["NFC_LOGIN_USERNAME"] = "admin@example.test"
+        os.environ["NFC_LOGIN_USERNAME"] = "EMP-010@securityteam.com"
         os.environ["NFC_LOGIN_PASSWORD"] = "unit-test-badge-password"
         self.app = create_app()
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
         self.store = Store(self.db_path)
-        self.admin = self.store.save({"userName": "admin@example.test", "title": "admin"})
+        self.admin = self.store.save({"userName": "EMP-010@securityteam.com", "title": "superadmin"})
+        self.legacy_admin = self.store.save({"userName": "admin@example.test", "title": "auditor"})
         self.headers = {"Authorization": "Bearer " + BRIDGE_TOKEN}
 
     def tearDown(self):
@@ -137,19 +146,19 @@ class NfcRouteTests(unittest.TestCase):
         self.assertFalse(response.json["login"])
 
     def test_poll_opens_session_with_the_stored_badge_credentials(self):
-        self.store.register_card("0FC728C9", "admin@example.test", "Tarjeta admin")
+        self.store.register_card("0FC728C9", self.admin["userName"], "Tarjeta Rodrigo")
         self.client.post("/nfc/tap", headers=self.headers, json={"uid": "0FC728C9"})
         with self.client.session_transaction() as session:
             session["csrf"] = "csrf-de-prueba"
         metadata = fake_response({"token_endpoint": "http://keycloak/token", "userinfo_endpoint": "http://keycloak/userinfo"})
         token = fake_response({"access_token": "token-de-prueba"})
-        identity = fake_response({"sub": "sub-admin", "email": "admin@example.test"})
+        identity = fake_response({"sub": "sub-rodrigo", "email": "EMP-010@securityteam.com"})
         with patch("app.wsgi.requests.get", side_effect=[metadata, identity]), patch("app.wsgi.requests.post", return_value=token) as posted:
             response = self.client.post("/nfc/poll", json={"csrf": "csrf-de-prueba"})
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json["login"])
         self.assertEqual(posted.call_args.kwargs["data"]["grant_type"], "password")
-        self.assertEqual(posted.call_args.kwargs["data"]["username"], "admin@example.test")
+        self.assertEqual(posted.call_args.kwargs["data"]["username"], "EMP-010@securityteam.com")
         with self.client.session_transaction() as session:
             self.assertEqual(session["uid"], self.admin["id"])
 
@@ -249,12 +258,15 @@ class NfcRouteTests(unittest.TestCase):
 
     def test_shift_change_page_and_api(self):
         """Verifica que la vista de cambio de turno y su API de auditoria funcionen."""
+        with self.client.session_transaction() as session:
+            session["uid"] = self.user["id"]
+            session["csrf"] = "csrf-turno"
         response = self.client.get("/turno")
         self.assertEqual(response.status_code, 200)
         self.assertIn("Hub de Seguridad", response.get_data(as_text=True))
 
-        api_response = self.client.post("/api/turno", json={
-            "operator": "Guardia Carlos M.",
+        api_response = self.client.post("/api/turno", headers={"X-CSRF-Token": "csrf-turno"}, json={
+            "operator": "Este nombre se ignora",
             "shift": "tarde",
             "status": "success",
             "cams": ["Cámara 1", "Cámara 2"]
@@ -267,3 +279,4 @@ class NfcRouteTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+

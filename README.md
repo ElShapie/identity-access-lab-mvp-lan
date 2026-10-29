@@ -60,9 +60,27 @@ La pantalla **Usuarios** muestra el directorio y los roles con el estilo del das
 - **Docker Compose:** red interna unificada, volúmenes persistentes, healthchecks y servicios centralizados (`keycloak`, `app`, `frigate`).
 - **Módulos opcionales:** ejemplos de RFID, badge NFC USB para inicio de sesión físico y ejercicios de Microsoft 365. Ver [`docs/GUIA_NVR_FRIGATE.md`](docs/GUIA_NVR_FRIGATE.md) y [`docs/MODULOS_OPCIONALES.md`](docs/MODULOS_OPCIONALES.md).
 
-La app ofrece una matriz pequeña: `admin`, `mantenimiento`, `auditor`, `consulta` y `sin_acceso`. Consulta el detalle en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
+La app ofrece una matriz editable por rol: `superadmin`, `admin`, `mantenimiento`, `auditor`, `consulta` y `sin_acceso`. Consulta el detalle en [`docs/ARQUITECTURA.md`](docs/ARQUITECTURA.md).
 
 Para las extensiones consulta [`docs/MODULOS_OPCIONALES.md`](docs/MODULOS_OPCIONALES.md). No son necesarias para iniciar el MVP.
+
+
+### Directorio de empleados y gestión de roles
+
+El padrón de empleados se carga desde un CSV privado y contiene 31 identidades activas; las cuentas con mayor privilegio reciben el rol `superadmin`. La administración de usuarios y la matriz de permisos queda restringida a identidades autorizadas por el directorio privado. Las contraseñas iniciales se generan al azar y se entregan por un archivo privado de credenciales.
+
+El directorio y sus contraseñas están en `.directory/accounts.json`, carpeta local ignorada por Git y montada como solo lectura en la app. La imagen aprovisiona esas cuentas en SQLite y Keycloak al arrancar. La cuenta administrativa de demostración se conserva con permisos de auditoría; el acceso de máximo privilegio se asigna a las cuentas autorizadas en el padrón privado. Los UID NFC no vienen en el Excel: registra cada UID físico en **Badge NFC** después de iniciar el puente lector; no se inventan UID.
+
+
+### Importar directorio privado
+
+El código no incluye nombres, correos ni contraseñas personales. Para cargar el padrón local, entrega el CSV privado al equipo de confianza y ejecútalo en la carpeta del proyecto:
+
+```bash
+python tools/import_directory_credentials.py RUTA_AL_CSV_PRIVADO.csv
+```
+
+El comando crea `.directory/accounts.json` (ignorado por Git y montado como solo lectura). Después, `docker compose up --build -d` sincroniza las identidades con SQLite y Keycloak. El CSV y `accounts.json` contienen contraseñas; no los publiques.
 
 ### NVR Frigate, Cámaras Android & App Móvil Flutter
 
@@ -98,4 +116,5 @@ Las pruebas locales se ejecutan con `python -m unittest discover -s tests -v`. P
 ## Licencia
 
 MIT; ver [`LICENSE`](LICENSE).
+
 

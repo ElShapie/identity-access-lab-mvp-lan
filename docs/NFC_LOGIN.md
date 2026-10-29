@@ -52,12 +52,11 @@ En `.env`:
 ```dotenv
 NFC_ENABLED=true
 NFC_BRIDGE_TOKEN=cambia-este-token-por-uno-de-32-caracteres-o-mas
-NFC_LOGIN_USERNAME=admin@example.test
 NFC_LOGIN_PASSWORD=
 NFC_TAP_TTL_SECONDS=15
 ```
 
-`NFC_LOGIN_PASSWORD` puede quedar vacío: si el usuario indicado es una cuenta de demostración, la app reutiliza la variable `DEMO_PASSWORD_*` correspondiente (`DEMO_PASSWORD_ADMIN`, `DEMO_PASSWORD_IAM`, etc.). Para una cuenta que no sea de demostración define `NFC_PASSWORD_<USUARIO>` en mayúsculas, por ejemplo `NFC_PASSWORD_MI_USUARIO_EXAMPLE_TEST`.
+`NFC_LOGIN_PASSWORD` puede quedar vacío: la app busca la cuenta de la lista de empleados en `.directory/accounts.json`, montada como solo lectura. Las cuentas heredadas usan `DEMO_PASSWORD_*`; también se puede configurar `NFC_PASSWORD_<USUARIO>` para otras cuentas. Mantén `.directory` fuera del control de versiones. El Excel de empleados no contiene UID; registra los UID físicos desde **Badge NFC** antes de iniciar sesión por tarjeta.
 
 Levanta de nuevo los servicios para que recojan la configuración:
 
@@ -88,10 +87,8 @@ La app acepta el UID en cualquiera de los dos órdenes, así que puedes registra
 Desde el contenedor de la app:
 
 ```bash
-docker compose exec app python -m app.nfc_cli --uid 0FC728C9 --user admin@example.test --label "Tarjeta del administrador"
 ```
 
-También puedes hacerlo desde la interfaz: entra como `admin@example.test` y usa la página **Badge NFC** del menú lateral.
 
 ### 4. Arrancar el puente
 
@@ -113,7 +110,6 @@ Deja esa terminal abierta mientras uses el laboratorio. Con `-AppUrl` se apunta 
 
 | Síntoma | Causa habitual | Comprobación |
 |---|---|---|
-| El puente dice `tarjeta no registrada en la app` | La tarjeta no está en la lista blanca | `docker compose exec app python -m app.nfc_cli --uid <UID> --user admin@example.test` |
 | El puente dice `token del puente incorrecto` | `NFC_BRIDGE_TOKEN` no coincide con el `-Token` del puente | Compara el `.env` con el argumento `-Token` |
 | El puente dice `la app no responde` | La app no está levantada o el puerto no es `8000` | `docker compose ps` y `-AppUrl` |
 | El puente no detecta ninguna tarjeta | Lector sin conexión, tarjeta mal apoyada o servicio de tarjetas parado | Revisa el cable USB y `Get-Service scardsvr` |
@@ -139,3 +135,4 @@ En algunos equipos `SCardListReaders()` provoca el cierre del proceso de Windows
 - [`app/nfc_cli.py`](../app/nfc_cli.py): alta y baja de tarjetas desde la terminal.
 - [`app/store.py`](../app/store.py): tablas `nfc_cards` y `nfc_taps`.
 - [`app/wsgi.py`](../app/wsgi.py): rutas `/nfc/tap`, `/nfc/poll` y `/nfc`.
+

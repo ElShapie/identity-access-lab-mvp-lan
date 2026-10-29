@@ -1148,6 +1148,8 @@
       });
     }
 
+    const csrfToken = {{ csrf|tojson }};
+
     function addLog() {
       const operatorInput = document.getElementById('operator');
       const operator = operatorInput.value.trim();
@@ -1185,7 +1187,7 @@
       // Sincronizar en segundo plano con el backend del Lab (crea evento en la bitácora)
       fetch('/api/turno', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken },
         body: JSON.stringify(entry)
       }).catch(err => console.log('Sincronización local offline'));
 
@@ -1230,3 +1232,4 @@
   </script>
 </body>
 </html>
+
