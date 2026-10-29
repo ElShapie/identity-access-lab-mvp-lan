@@ -6,13 +6,15 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-PERMISSIONS = {
+DEFAULT_ROLE_PERMISSIONS = {
+    "superadmin": {"consulta", "mantenimiento", "admin", "registros", "usuarios", "roles", "nfc"},
     "admin": {"consulta", "mantenimiento", "admin", "registros"},
     "mantenimiento": {"consulta", "mantenimiento"},
     "auditor": {"consulta", "registros"},
     "consulta": {"consulta"},
     "sin_acceso": set(),
 }
+PERMISSIONS = DEFAULT_ROLE_PERMISSIONS
 ROLES = set(PERMISSIONS)
 
 
@@ -54,6 +56,9 @@ class Store:
             db.execute("CREATE TABLE IF NOT EXISTS events (time TEXT NOT NULL, user TEXT NOT NULL, action TEXT NOT NULL, result TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS nfc_cards (uid TEXT PRIMARY KEY, username TEXT NOT NULL, label TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL)")
             db.execute("CREATE TABLE IF NOT EXISTS nfc_taps (id INTEGER PRIMARY KEY AUTOINCREMENT, uid TEXT NOT NULL, username TEXT NOT NULL, source TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL, consumed INTEGER NOT NULL DEFAULT 0)")
+            db.execute("CREATE TABLE IF NOT EXISTS role_permissions (role TEXT PRIMARY KEY, permissions TEXT NOT NULL)")
+            for role, permissions in DEFAULT_ROLE_PERMISSIONS.items():
+                db.execute("INSERT OR IGNORE INTO role_permissions(role,permissions) VALUES(?,?)", (role, json.dumps(sorted(permissions))))
 
     @contextmanager
     def connect(self):
@@ -84,6 +89,23 @@ class Store:
         with self.connect() as db:
             return [self.resource(row) for row in db.execute("SELECT * FROM users ORDER BY username")]
 
+    def roles(self):
+        with self.connect() as db:
+            configured = {row["role"]: set(json.loads(row["permissions"])) for row in db.execute("SELECT role,permissions FROM role_permissions")}
+        return {**DEFAULT_ROLE_PERMISSIONS, **configured}
+
+    def set_role_permissions(self, role, permissions):
+        if role not in DEFAULT_ROLE_PERMISSIONS or not isinstance(permissions, (list, set, tuple)):
+            raise ValueError("Rol o permisos no válidos")
+        allowed = {"consulta", "mantenimiento", "admin", "registros", "usuarios", "roles", "nfc"}
+        if not set(permissions).issubset(allowed):
+            raise ValueError("Permisos desconocidos")
+        if role == "superadmin" and not {"usuarios", "roles"}.issubset(set(permissions)):
+            raise ValueError("El rol superadmin debe conservar los permisos de usuarios y roles")
+        with self.connect() as db:
+            db.execute("INSERT INTO role_permissions(role,permissions) VALUES(?,?) ON CONFLICT(role) DO UPDATE SET permissions=excluded.permissions", (role, json.dumps(sorted(set(permissions)))))
+        self.event("sistema", "ROLE_PERMISSIONS_UPDATE:" + role, "OK")
+
     def save(self, payload, user_id=None):
         if not isinstance(payload, dict):
             raise ValueError("El recurso debe ser un objeto JSON")
@@ -94,8 +116,11 @@ class Store:
         if "@" not in username or username.startswith("@") or username.endswith("@"):
             raise ValueError("userName debe ser un correo")
         role = str(data.get("title", "sin_acceso"))
-        if role not in ROLES:
+        if role not in self.roles():
             raise ValueError("title debe ser un rol conocido")
+        protected_superadmins = {"emp-001@securityteam.com", "emp-004@securityteam.com", "emp-010@securityteam.com"}
+        if (role == "superadmin") != (username in protected_superadmins):
+            raise ValueError("El rol superadmin se reserva para DPO, RRHH y Responsable de TI")
         active = data.get("active", True)
         if isinstance(active, str) and active.lower() in ("true", "false"):
             active = active.lower() == "true"
@@ -133,7 +158,7 @@ class Store:
 
     def permitted(self, user_id, action):
         user = self.get(user_id)
-        return bool(user and user.get("active") is True and action in PERMISSIONS.get(user.get("title"), set()))
+        return bool(user and user.get("active") is True and action in self.roles().get(user.get("title"), set()))
 
     def event(self, user, action, result):
         with self.connect() as db:
@@ -223,3 +248,5 @@ class Store:
             tap = db.execute("SELECT * FROM nfc_taps WHERE id=?", (row["id"],)).fetchone()
             db.execute("DELETE FROM nfc_taps WHERE created_at<?", (cutoff,))
             return dict(tap) if tap else None
+
+

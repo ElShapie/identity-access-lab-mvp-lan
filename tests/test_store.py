@@ -73,6 +73,31 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(self.store.remove_card("0FC728C9"))
         self.assertIsNone(self.store.card("0FC728C9"))
 
+    def test_superadmin_is_reserved_for_the_three_roster_owners(self):
+        owner = self.store.save({"userName": "emp-001@securityteam.com", "title": "superadmin"})
+        self.assertTrue(self.store.permitted(owner["id"], "usuarios"))
+        with self.assertRaises(ValueError):
+            self.store.save({"userName": "other@example.test", "title": "superadmin"})
+        with self.assertRaises(ValueError):
+            self.store.save({"title": "auditor"}, owner["id"])
+
+    def test_role_permission_changes_apply_to_existing_users(self):
+        self.store.set_role_permissions("mantenimiento", ["consulta"])
+        self.assertTrue(self.store.permitted(self.user["id"], "consulta"))
+        self.assertFalse(self.store.permitted(self.user["id"], "mantenimiento"))
+
+    def test_admin_role_cannot_manage_users_or_role_permissions_by_default(self):
+        admin = self.store.save({"userName": "admin@example.test", "title": "admin"})
+        self.assertTrue(self.store.permitted(admin["id"], "admin"))
+        self.assertFalse(self.store.permitted(admin["id"], "usuarios"))
+        self.assertFalse(self.store.permitted(admin["id"], "roles"))
+
+    def test_superadmin_must_keep_user_and_role_management(self):
+        self.store.save({"userName": "emp-010@securityteam.com", "title": "superadmin"})
+        with self.assertRaises(ValueError):
+            self.store.set_role_permissions("superadmin", ["consulta", "admin"])
+
 
 if __name__ == "__main__":
     unittest.main()
+
